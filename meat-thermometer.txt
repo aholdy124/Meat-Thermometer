@@ -1,0 +1,295 @@
+#include <OneWire.h>
+#include <DallasTemperature.h>
+
+#include "WaveUtil.h"
+#include "WaveHC.h"
+
+
+SdReader card;    // This object holds the information for the card
+FatVolume vol;    // This holds the information for the partition on the card
+FatReader root;   // This holds the information for the filesystem on the card
+FatReader f;      // This holds the information for the file we're playing
+
+
+WaveHC wave;      // This is the only wave (audio) object, since we will only play one at a time
+
+#define DEBOUNCE 100  // button debouncer
+
+// this handy function will return the number of bytes currently free in RAM, great for debugging!   
+int freeRam(void)
+{
+  extern int  __bss_end; 
+  extern int  *__brkval; 
+  int free_memory; 
+  if((int)__brkval == 0) {
+    free_memory = ((int)&free_memory) - ((int)&__bss_end); 
+  }
+  else {
+    free_memory = ((int)&free_memory) - ((int)__brkval); 
+  }
+  return free_memory; 
+} 
+ 
+void sdErrorCheck(void)
+{
+  if (!card.errorCode()) return;
+  putstring("\n\rSD I/O error: ");
+  Serial.print(card.errorCode(), HEX);
+  putstring(", ");
+  Serial.println(card.errorData(), HEX);
+  while(1);
+}
+
+int currentTemp = 0;
+int RARE = 1;
+int MED_RARE = 2;
+int MED = 3;
+int MED_WELL = 4;
+int WELL = 5;
+
+long randNumber;
+
+
+// Data wire is plugged into port 6 on the Arduino
+#define ONE_WIRE_BUS 6
+
+// Setup a oneWire instance to communicate with any OneWire devices (not just Maxim/Dallas temperature ICs)
+OneWire oneWire(ONE_WIRE_BUS);
+
+// Pass our oneWire reference to Dallas Temperature. 
+DallasTemperature sensors(&oneWire);
+
+// arrays to hold device address
+DeviceAddress insideThermometer;
+
+
+void setup(void)
+{
+  // start serial port
+  Serial.begin(9600);
+  
+  // random number generator
+  randomSeed(analogRead(0)); 
+   
+   
+  /* ***BEGIN WAV CONTROL*** */ 
+  putstring_nl("WaveHC with 6 buttons");
+  
+  putstring("Free RAM: ");       // This can help with debugging, running out of RAM is bad
+  Serial.println(freeRam());      // if this is under 150 bytes it may spell trouble!
+  
+  // Set the output pins for the DAC control. This pins are defined in the library
+  pinMode(2, OUTPUT);
+  pinMode(3, OUTPUT);
+  pinMode(4, OUTPUT);
+  pinMode(5, OUTPUT);
+ 
+  // pin13 LED
+  pinMode(13, OUTPUT);
+  
+    //  if (!card.init(true)) { //play with 4 MHz spi if 8MHz isn't working for you
+  if (!card.init()) {         //play with 8 MHz spi (default faster!)  
+    putstring_nl("Card init. failed!");  // Something went wrong, lets print out why
+    sdErrorCheck();
+    while(1);                            // then 'halt' - do nothing!
+  }
+  
+  // enable optimize read - some cards may timeout. Disable if you're having problems
+  card.partialBlockRead(true);
+ 
+// Now we will look for a FAT partition!
+  uint8_t part;
+  for (part = 0; part < 5; part++) {     // we have up to 5 slots to look in
+    if (vol.init(card, part)) 
+      break;                             // we found one, lets bail
+  }
+  if (part == 5) {                       // if we ended up not finding one  :(
+    putstring_nl("No valid FAT partition!");
+    sdErrorCheck();      // Something went wrong, lets print out why
+    while(1);                            // then 'halt' - do nothing!
+  }
+  
+  // Lets tell the user about what we found
+  putstring("Using partition ");
+  Serial.print(part, DEC);
+  putstring(", type is FAT");
+  Serial.println(vol.fatType(),DEC);     // FAT16 or FAT32?
+  
+  // Try to open the root directory
+  if (!root.openRoot(vol)) {
+    putstring_nl("Can't open root dir!"); // Something went wrong,
+    while(1);                             // then 'halt' - do nothing!
+  }
+  
+  // Whew! We got past the tough parts.
+  putstring_nl("Ready!");
+  
+  /* ***END WAV CONTROL*** */ 
+  
+  
+ /* ***BEGIN TEMP CONTROL*** */ 
+ 
+ Serial.println("Dallas Temperature IC Control Library Demo");
+
+  // locate devices on the bus
+  Serial.print("Locating devices...");
+  sensors.begin();
+  Serial.print("Found ");
+  Serial.print(sensors.getDeviceCount(), DEC);
+  Serial.println(" devices.");
+
+  // report parasite power requirements
+  Serial.print("Parasite power is: "); 
+  if (sensors.isParasitePowerMode()) Serial.println("ON");
+  else Serial.println("OFF");
+ 
+  if (!sensors.getAddress(insideThermometer, 0)) Serial.println("Unable to find address for Device 0"); 
+ 
+  // show the addresses we found on the bus
+  Serial.print("Device 0 Address: ");
+  printAddress(insideThermometer);
+  Serial.println();
+
+  // set the resolution to 9 bit (Each Dallas/Maxim device is capable of several different resolutions)
+  sensors.setResolution(insideThermometer, 12);
+ 
+  Serial.print("Device 0 Resolution: ");
+  Serial.print(sensors.getResolution(insideThermometer), DEC); 
+  Serial.println();
+  
+ /* for(int pinNumber = 8; pinNumber<11; pinNumber++){
+    pinMode(pinNumber, OUTPUT);
+    digitalWrite(pinNumber, LOW);
+  } */
+
+  
+}
+
+/* ***END TEMP CONTROL*** */
+
+/* ***BEGIN TEMP-to-WAV FUNCTION*** */
+
+// function to print the temperature for a device
+void printTemperature(DeviceAddress deviceAddress)
+{
+
+  float tempC = sensors.getTempC(deviceAddress);
+  //Serial.print("Temp C: ");
+  //Serial.print(tempC);
+  Serial.print(" Temp F: ");
+  float temp = (DallasTemperature::toFahrenheit(tempC)); // Converts tempC to Fahrenheit
+ 
+  Serial.println(temp);
+  
+  randNumber = random(2);
+  Serial.println(randNumber);
+  
+  if(temp < 75.0){
+    Serial.println("Your steak is raw.");
+  }else if (temp >= 75.0 && temp < 78.0){
+    Serial.println("Your steak is rare.");
+    if(currentTemp != RARE){
+      if(randNumber = 0){
+       playcomplete("RARE2.WAV");
+       }else if(randNumber = 1);{
+        playcomplete("RARE.WAV");
+      }
+    }  
+    currentTemp = RARE;
+  }else if (temp >= 78.0 && temp < 82.0){
+    Serial.println("Your steak is medium rare.");
+    if(currentTemp != MED_RARE){
+     if(randNumber = 0){
+      playcomplete("MEDRARE2.WAV");
+     }else if(randNumber = 1);{
+        playcomplete("MEDRARE.WAV");
+      }
+    }  
+    currentTemp = MED_RARE;
+  }else if (temp >= 82.0 && temp < 86.0){
+    Serial.println("Your steak is medium.");
+    if(currentTemp != MED){
+      if(randNumber = 0){
+      playcomplete("MEDIUM2.WAV");
+      }else if (randNumber = 1){
+      playcomplete("MEDIUM.WAV");
+      }      
+    }  
+    currentTemp = MED;
+  }else if (temp >= 86.0 && temp < 90.0){
+    Serial.println("Your steak is medium well.");
+    if(currentTemp != MED_WELL){
+      if(randNumber = 0){
+      playcomplete("MEDWELL2.WAV");
+      }else if(randNumber = 1){
+        playcomplete("MEDWELL.WAV");
+      }
+    }  
+    currentTemp = MED_WELL;
+  }else if (temp >= 90.0){
+    Serial.println("Your steak is well done.");
+    if(currentTemp != WELL){
+      if(randNumber = 0){
+      playcomplete("WELDONE2.WAV");
+      }else if(randNumber = 1){
+        playcomplete("WELLDONE.WAV");
+      }
+    }  
+    currentTemp = WELL;
+  }
+ 
+} 
+
+/* ***END TEMP-to-WAV FUNCTION*** */
+
+void loop(void)
+{
+  // call sensors.requestTemperatures() to issue a global temperature 
+  // request to all devices on the bus
+  Serial.print("Requesting temperatures...");
+  sensors.requestTemperatures(); // Send the command to get temperatures
+  Serial.println("DONE");
+  
+  // It responds almost immediately. Let's print out the data
+  printTemperature(insideThermometer); // Use a simple function to print out the data
+    
+  delay(4000);
+}
+
+// Plays a full file from beginning to end with no pause.
+void playcomplete(char *name) {
+  // call our helper to find and play this name
+  playfile(name);
+  while (wave.isplaying) {
+  // do nothing while its playing
+  }
+  // now its done playing
+}
+ 
+void playfile(char *name) {
+  // see if the wave object is currently doing something
+  if (wave.isplaying) {// already playing something, so stop it!
+    wave.stop(); // stop it
+  }
+  // look in the root directory and open the file
+  if (!f.open(root, name)) {
+    putstring("Couldn't open file "); Serial.print(name); return;
+  }
+  // OK read the file and turn it into a wave object
+  if (!wave.create(f)) {
+    putstring_nl("Not a valid WAV"); return;
+  }
+  
+  // ok time to play! start playback
+  wave.play();
+}
+
+// function to print a device address
+void printAddress(DeviceAddress deviceAddress)
+{
+  for (uint8_t i = 0; i < 8; i++)
+  {
+    if (deviceAddress[i] < 16) Serial.print("0");
+    Serial.print(deviceAddress[i], HEX);
+  }
+}
